@@ -95,9 +95,7 @@ jobs:
         tag_name: OpenWrt_${{ env.FILE_DATE }}
         files: ${{ env.PACKAGED_OUTPUTPATH }}/*.img.gz
         body: |
-          首次使用建议全新刷写
-          * 基本信息
-          IP: 192.168.2.2
+          IP: 192.168.68.68
           账户: root
           密码: password
 
