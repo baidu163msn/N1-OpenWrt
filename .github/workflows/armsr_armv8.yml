@@ -2,7 +2,7 @@ name: Build ImmortalWrt-25.12 for armsr_armv8
 
 on:
   workflow_dispatch:
-   inputs:
+    inputs:
       ssh:
         description: 'SSH connection to Actions'
         required: true
@@ -69,6 +69,42 @@ jobs:
       working-directory: ./openwrt
       run: |
         make defconfig
+
+        # ===== 强制注入 PARTSIZE（防止被 defconfig 丢弃）=====
+        if grep -q "CONFIG_TARGET_ROOTFS_PARTSIZE" .config; then
+          sed -i 's/CONFIG_TARGET_ROOTFS_PARTSIZE=.*/CONFIG_TARGET_ROOTFS_PARTSIZE=1024/' .config
+        else
+          echo "CONFIG_TARGET_ROOTFS_PARTSIZE=1024" >> .config
+        fi
+
+        # 确保 EXT4FS 为 y（amlogic 插件会强制依赖）
+        if grep -q "CONFIG_TARGET_ROOTFS_EXT4FS" .config; then
+          sed -i 's/CONFIG_TARGET_ROOTFS_EXT4FS=.*/CONFIG_TARGET_ROOTFS_EXT4FS=y/' .config
+        else
+          echo "CONFIG_TARGET_ROOTFS_EXT4FS=y" >> .config
+        fi
+
+        # 再次 defconfig 让依赖关系重新计算
+        make defconfig
+
+        # ===== 验证关键配置 =====
+        echo "=========================================="
+        echo "  验证编译配置"
+        echo "=========================================="
+        echo "[ROOTFS_PARTSIZE]:"
+        grep "ROOTFS_PARTSIZE" .config || echo "  ❌ 未找到!"
+        echo "[ROOTFS_EXT4FS]:"
+        grep "ROOTFS_EXT4FS" .config || echo "  ❌ 未找到!"
+        echo "[OpenClash]:"
+        grep "openclash" .config || echo "  ❌ 未找到!"
+        echo "[Sing-Box]:"
+        grep "sing-box" .config || echo "  ❌ 未找到!"
+        echo "[PassWall (应已去除)]:"
+        grep "passwall" .config && echo "  ⚠️ 仍存在!" || echo "  ✓ 已去除"
+        echo "[DAED (应已去除)]:"
+        grep "daed" .config && echo "  ⚠️ 仍存在!" || echo "  ✓ 已去除"
+        echo "=========================================="
+
         make download -j$(( $(nproc) * 2 ))
         find dl -size -1k -exec rm -f {} \;
 
@@ -98,7 +134,7 @@ jobs:
         body: |
           首次使用建议全新刷写
           * 基本信息
-          IP: 192.168.2.2
+          IP: 192.168.68.68
           账户: root
           密码: password
 
@@ -106,4 +142,4 @@ jobs:
       uses: mgz0227/delete-older-releases@master
       with:
         keep_latest: 2
-        delete_tags : true
+        delete_tags: true
