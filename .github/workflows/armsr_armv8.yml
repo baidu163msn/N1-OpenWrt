@@ -1,12 +1,12 @@
-name: Build ImmortalWrt-25.12 for armsr_armv8
+name: Build ImmortalWrt-25.12 for Phicomm N1
 
 on:
   workflow_dispatch:
     inputs:
       ssh:
-        description: 'SSH connection to Actions'
+        description: "SSH connection to Actions"
         required: true
-        default: 'false'
+        default: "false"
         type: choice
         options:
           - true
@@ -25,102 +25,121 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@main
+      - name: Checkout
+        uses: actions/checkout@main
 
-    - name: Initialize environment
-      env:
-        DEBIAN_FRONTEND: noninteractive
-      run: |
-        sudo -E apt-get -qq update > /dev/null
-        sudo -E apt-get -qq install -y $(curl -fsSL https://raw.githubusercontent.com/nantayo/My-Pkg/master/openwrt) > /dev/null
-        sudo -E apt-get -qq autoremove --purge > /dev/null
-        sudo -E apt-get -qq clean > /dev/null
-        sudo timedatectl set-timezone "$TZ"
-        sudo mkdir -p /workdir
-        sudo chown $USER:$GROUPS /workdir
+      - name: Initialize environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt-get -qq update > /dev/null
+          sudo -E apt-get -qq install -y $(curl -fsSL https://raw.githubusercontent.com/nantayo/My-Pkg/master/openwrt) > /dev/null
+          sudo -E apt-get -qq autoremove --purge > /dev/null
+          sudo -E apt-get -qq clean > /dev/null
+          sudo timedatectl set-timezone "$TZ"
+          sudo mkdir -p /workdir
+          sudo chown $USER:$GROUPS /workdir
 
-    - name: Clone source code
-      working-directory: /workdir
-      run: |
-        git clone $REPO_URL -b $REPO_BRANCH --single-branch --depth=1 openwrt
-        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
-        echo "FILE_DATE=$(date +"%Y%m%d")" >> $GITHUB_ENV
+      - name: Clone source code
+        working-directory: /workdir
+        run: |
+          git clone $REPO_URL -b $REPO_BRANCH --single-branch --depth=1 openwrt
+          ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+          echo "FILE_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
 
-    - name: Update & Install feeds
-      run: |
-        chmod +x armsr/armv8/diy/diy.sh
-        cd openwrt
-        ./scripts/feeds update -a
-        $GITHUB_WORKSPACE/armsr/armv8/diy/diy.sh
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
+      - name: Update and Install feeds
+        run: |
+          chmod +x armsr/armv8/diy/diy.sh
+          cd openwrt
+          ./scripts/feeds update -a
+          $GITHUB_WORKSPACE/armsr/armv8/diy/diy.sh
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
 
-    - name: Load N1 custom config
-      run: |
-        rm -rf openwrt/files openwrt/.config
-        mv armsr/armv8/N1/files armsr/armv8/N1/.config openwrt/
+      - name: Load N1 custom config
+        run: |
+          rm -rf openwrt/files openwrt/.config
+          mv armsr/armv8/N1/files armsr/armv8/N1/.config openwrt/
 
-    - name: SSH connect to Actions
-      uses: P3TERX/ssh2actions@main
-      if: github.event.inputs.ssh == 'true'
+      - name: SSH connect to Actions
+        uses: P3TERX/ssh2actions@main
+        if: github.event.inputs.ssh == 'true'
 
-    - name: Download package
-      working-directory: ./openwrt
-      run: |
-        make defconfig
+      - name: Download package
+        working-directory: ./openwrt
+        run: |
+          make defconfig
 
-        # 强制注入 PARTSIZE
-        if grep -q "CONFIG_TARGET_ROOTFS_PARTSIZE" .config; then
-          sed -i 's/CONFIG_TARGET_ROOTFS_PARTSIZE=.*/CONFIG_TARGET_ROOTFS_PARTSIZE=1024/' .config
-        else
-          echo "CONFIG_TARGET_ROOTFS_PARTSIZE=1024" >> .config
-        fi
-        if grep -q "CONFIG_TARGET_ROOTFS_EXT4FS" .config; then
-          sed -i 's/CONFIG_TARGET_ROOTFS_EXT4FS=.*/CONFIG_TARGET_ROOTFS_EXT4FS=y/' .config
-        else
-          echo "CONFIG_TARGET_ROOTFS_EXT4FS=y" >> .config
-        fi
-        make defconfig
+          # Force inject PARTSIZE to prevent defconfig from dropping it
+          if grep -q "CONFIG_TARGET_ROOTFS_PARTSIZE" .config; then
+            sed -i 's/CONFIG_TARGET_ROOTFS_PARTSIZE=.*/CONFIG_TARGET_ROOTFS_PARTSIZE=1024/' .config
+          else
+            echo "CONFIG_TARGET_ROOTFS_PARTSIZE=1024" >> .config
+          fi
 
-        make download -j$(( $(nproc) * 2 ))
-        find dl -size -1k -exec rm -f {} \;
+          # Force enable EXT4FS (luci-app-amlogic depends on it)
+          if grep -q "CONFIG_TARGET_ROOTFS_EXT4FS" .config; then
+            sed -i 's/CONFIG_TARGET_ROOTFS_EXT4FS=.*/CONFIG_TARGET_ROOTFS_EXT4FS=y/' .config
+          else
+            echo "CONFIG_TARGET_ROOTFS_EXT4FS=y" >> .config
+          fi
 
-    - name: Compile N1 firmware
-      run: |
-        chmod -R 755 openwrt
-        cd openwrt
-        echo -e "$(nproc) thread compile"
-        make -j$(( $(nproc) + 1 )) || make -j1 V=s
+          # Re-run defconfig to recalculate dependencies
+          make defconfig
 
-    - name: Package N1 firmware
-      uses: ophub/amlogic-s9xxx-openwrt@main
-      with:
-        openwrt_path: openwrt/bin/targets/armsr/armv8/*rootfs.tar.gz
-        openwrt_board: s905d
-        kernel_repo: ophub/kernel
-        kernel_usage: flippy
-        openwrt_kernel: 6.12.y
-        openwrt_size: 256/1024
-        builder_name: nantayo
+          # Verify key configs
+          echo "========== Config Verification =========="
+          grep "ROOTFS_PARTSIZE" .config
+          grep "ROOTFS_EXT4FS" .config
+          grep "luci-app-openclash" .config
+          grep "luci-app-sing-box" .config
+          grep "luci-app-passwall" .config || echo "passwall: removed OK"
+          grep "luci-app-daed" .config || echo "daed: removed OK"
+          echo "========================================="
 
-    # =====================================================
-    # 【新增】提取固件信息（内核版本 + 插件列表）
-    # =====================================================
-    - name: Generate firmware info
-      run: |
-        # ----- 1. 提取内核版本 -----
-        # 方法A：从 ophub 打包输出的文件名中提取（格式：xxx_k6.12.94_xxx.img.gz）
-        KERNEL_VER=$(ls ${{ env.PACKAGED_OUTPUTPATH }}/*.img.gz 2>/dev/null \
-          | head -1 \
-          | grep -oP 'k\K[0-9]+\.[0-9]+\.[0-9]+[^_]*')
+          make download -j$(( $(nproc) * 2 ))
+          find dl -size -1k -exec rm -f {} \;
 
-        # 方法B（备选）：如果方法A失败，从内核包目录提取
-        if [ -z "$KERNEL_VER" ]; then
-          KERNEL_VER=$(ls openwrt/bin/targets/armsr/armv8/packages/linux-*.apk 2>/dev/null \
-            | head -1 \
-            | grep -oP '[0-9]+\.[0-9]+\.[0-9]+')
-        fi
+      - name: Compile N1 firmware
+        run: |
+          chmod -R 755 openwrt
+          cd openwrt
+          echo "$(nproc) thread compile"
+          make -j$(( $(nproc) + 1 )) || make -j1 V=s
 
-        # 方法C（备选）：从 version.buildinfo 提取
-        if [ -z "$
+      - name: Package N1 firmware
+        uses: ophub/amlogic-s9xxx-openwrt@main
+        with:
+          openwrt_path: openwrt/bin/targets/armsr/armv8/*rootfs.tar.gz
+          openwrt_board: s905d
+          kernel_repo: ophub/kernel
+          kernel_usage: flippy
+          openwrt_kernel: 6.12.y
+          openwrt_size: 256/1024
+          builder_name: nantayo
+
+      - name: Generate firmware info
+        run: |
+          # 1. Extract kernel version from ophub output filename
+          IMG_FILE=$(ls ${{ env.PACKAGED_OUTPUTPATH }}/*.img.gz 2>/dev/null | head -1)
+          if [ -n "$IMG_FILE" ]; then
+            KERNEL_VER=$(basename "$IMG_FILE" | sed 's/.*k\([0-9]*\.[0-9]*\.[0-9]*\).*/\1/')
+          fi
+
+          # 2. Fallback: extract from kernel package
+          if [ -z "$KERNEL_VER" ]; then
+            KPKG=$(ls openwrt/bin/targets/armsr/armv8/packages/linux-*.apk 2>/dev/null | head -1)
+            if [ -n "$KPKG" ]; then
+              KERNEL_VER=$(basename "$KPKG" | sed 's/.*linux-\([0-9]*\.[0-9]*\.[0-9]*\).*/\1/')
+            fi
+          fi
+
+          # 3. Fallback: extract from version.buildinfo
+          if [ -z "$KERNEL_VER" ]; then
+            KERNEL_VER=$(grep -o '[0-9]*\.[0-9]*\.[0-9]*' openwrt/bin/targets/armsr/armv8/version.buildinfo 2>/dev/null | head -1)
+          fi
+
+          echo "KERNEL_VER=${KERNEL_VER:-unknown}" >> $GITHUB_ENV
+
+          # 4. Extract installed luci-app plugins
+          PLUGINS=$(grep 'CONFIG_PACKAGE_luci-app-.*=y' o
