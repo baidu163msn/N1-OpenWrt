@@ -70,24 +70,20 @@ jobs:
         run: |
           make defconfig
 
-          # Force inject PARTSIZE
           if grep -q "CONFIG_TARGET_ROOTFS_PARTSIZE" .config; then
             sed -i 's/CONFIG_TARGET_ROOTFS_PARTSIZE=.*/CONFIG_TARGET_ROOTFS_PARTSIZE=1024/' .config
           else
             echo "CONFIG_TARGET_ROOTFS_PARTSIZE=1024" >> .config
           fi
 
-          # Force enable EXT4FS
           if grep -q "CONFIG_TARGET_ROOTFS_EXT4FS" .config; then
             sed -i 's/CONFIG_TARGET_ROOTFS_EXT4FS=.*/CONFIG_TARGET_ROOTFS_EXT4FS=y/' .config
           else
             echo "CONFIG_TARGET_ROOTFS_EXT4FS=y" >> .config
           fi
 
-          # Re-run defconfig
           make defconfig
 
-          # Verify (|| true prevents bash -e from aborting)
           echo "========== Config Verification =========="
           grep "ROOTFS_PARTSIZE" .config || true
           grep "ROOTFS_EXT4FS" .config || true
@@ -124,22 +120,61 @@ jobs:
           if [ -n "$IMG_FILE" ]; then
             KERNEL_VER=$(basename "$IMG_FILE" | sed 's/.*k\([0-9]*\.[0-9]*\.[0-9]*\).*/\1/')
           fi
-
-          if [ -z "$KERNEL_VER" ]; then
-            KPKG=$(ls openwrt/bin/targets/armsr/armv8/packages/linux-*.apk 2>/dev/null | head -1)
-            if [ -n "$KPKG" ]; then
-              KERNEL_VER=$(basename "$KPKG" | sed 's/.*linux-\([0-9]*\.[0-9]*\.[0-9]*\).*/\1/')
-            fi
-          fi
-
           if [ -z "$KERNEL_VER" ]; then
             KERNEL_VER=$(grep -o '[0-9]*\.[0-9]*\.[0-9]*' openwrt/bin/targets/armsr/armv8/version.buildinfo 2>/dev/null | head -1)
           fi
-
           echo "KERNEL_VER=${KERNEL_VER:-unknown}" >> $GITHUB_ENV
 
           PLUGINS=$(grep 'CONFIG_PACKAGE_luci-app-.*=y' openwrt/.config | sed 's/CONFIG_PACKAGE_//;s/=y//' | sort | tr '\n' ' ')
           echo "PLUGINS_LIST=${PLUGINS}" >> $GITHUB_ENV
 
-          OW_VER=$(head -1 openwrt/bin/targets/armsr/armv8/version.buildinfo 2>/dev/null | awk '{print $2}')
-     
+          OW_VER=$(head -1 openwrt/bin/targets/armsr/armv8/version.buildinfo 2>/dev/null | awk '{print $2}') || true
+          echo "OW_VER=${OW_VER:-ImmortalWrt 25.12}" >> $GITHUB_ENV
+
+          echo "=========================================="
+          echo "  Kernel:  ${KERNEL_VER:-unknown}"
+          echo "  Plugins: ${PLUGINS}"
+          echo "  Version: ${OW_VER:-ImmortalWrt 25.12}"
+          echo "=========================================="
+
+      - name: Upload firmware to release
+        uses: softprops/action-gh-release@master
+        with:
+          tag_name: OpenWrt_${{ env.FILE_DATE }}
+          files: ${{ env.PACKAGED_OUTPUTPATH }}/*.img.gz
+          body: |
+            ## Firmware Info
+
+            | Item | Detail |
+            |------|--------|
+            | System | ${{ env.OW_VER }} |
+            | Kernel | ${{ env.KERNEL_VER }} |
+            | Device | Phicomm N1 (S905D) |
+            | Build Date | ${{ env.FILE_DATE }} |
+
+            ## Installed Plugins
+
+            ```
+            ${{ env.PLUGINS_LIST }}
+            ```
+
+            ## Default Settings
+
+            | Item | Value |
+            |------|-------|
+            | IP | 192.168.2.2 |
+            | Gateway | 192.168.2.1 |
+            | User | root |
+            | Password | password |
+            | DTB | meson-gxl-s905d-p230.dtb |
+
+            ## Notes
+
+            - Flash eMMC via USB or luci-app-amlogic
+            - Recommend 1-2GB swap for stability
+
+      - name: Delete old releases
+        uses: mgz0227/delete-older-releases@master
+        with:
+          keep_latest: 2
+          delete_tags: true
