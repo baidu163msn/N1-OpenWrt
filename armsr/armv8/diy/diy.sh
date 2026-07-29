@@ -1,18 +1,7 @@
 #!/bin/bash
 
-# Adjust source code
-patch -p1 -f < $(dirname "$0")/luci.patch
+# Set default hostname
+sed -i 's/ImmortalWrt/Phicomm-N1/g' package/base-files/files/bin/config_generate
 
-# Clone packages
-git clone https://github.com/ophub/luci-app-amlogic --depth=1 clone/amlogic
-git clone https://github.com/Openwrt-Passwall/openwrt-passwall --depth=1 clone/passwall
-git clone https://github.com/QiuSimons/luci-app-daed clone/daed
-git clone https://github.com/Zerogiven-OpenWRT-Packages/luci-app-podman --depth=1 feeds/luci/applications/luci-app-podman
-
-# Adjust packages
-rm -rf feeds/luci/applications/luci-app-daed feeds/luci/applications/luci-app-passwall
-cp -rf clone/amlogic/luci-app-amlogic clone/daed/luci-app-daed clone/passwall/luci-app-passwall feeds/luci/applications/
-sed -i '/luci-app-attendedsysupgrade/d' feeds/luci/collections/luci/Makefile
-
-# Clean packages
-rm -rf clone
+# Set default root password to "password"
+sed -i 's/$1$V4UetPzk$CYXluq4wUazHjmCDBCqXF.//g' package/base-files/files/etc/shadow
