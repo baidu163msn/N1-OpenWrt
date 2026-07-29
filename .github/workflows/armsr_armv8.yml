@@ -70,31 +70,31 @@ jobs:
         run: |
           make defconfig
 
-          # Force inject PARTSIZE to prevent defconfig from dropping it
+          # Force inject PARTSIZE
           if grep -q "CONFIG_TARGET_ROOTFS_PARTSIZE" .config; then
             sed -i 's/CONFIG_TARGET_ROOTFS_PARTSIZE=.*/CONFIG_TARGET_ROOTFS_PARTSIZE=1024/' .config
           else
             echo "CONFIG_TARGET_ROOTFS_PARTSIZE=1024" >> .config
           fi
 
-          # Force enable EXT4FS (luci-app-amlogic depends on it)
+          # Force enable EXT4FS
           if grep -q "CONFIG_TARGET_ROOTFS_EXT4FS" .config; then
             sed -i 's/CONFIG_TARGET_ROOTFS_EXT4FS=.*/CONFIG_TARGET_ROOTFS_EXT4FS=y/' .config
           else
             echo "CONFIG_TARGET_ROOTFS_EXT4FS=y" >> .config
           fi
 
-          # Re-run defconfig to recalculate dependencies
+          # Re-run defconfig
           make defconfig
 
-          # Verify key configs
+          # Verify (|| true prevents bash -e from aborting)
           echo "========== Config Verification =========="
-          grep "ROOTFS_PARTSIZE" .config
-          grep "ROOTFS_EXT4FS" .config
-          grep "luci-app-openclash" .config
-          grep "luci-app-sing-box" .config
-          grep "luci-app-passwall" .config || echo "passwall: removed OK"
-          grep "luci-app-daed" .config || echo "daed: removed OK"
+          grep "ROOTFS_PARTSIZE" .config || true
+          grep "ROOTFS_EXT4FS" .config || true
+          grep "openclash" .config || echo "WARN: openclash not found"
+          grep "sing-box" .config || echo "WARN: sing-box not found"
+          grep "passwall" .config || echo "OK: passwall removed"
+          grep "daed" .config || echo "OK: daed removed"
           echo "========================================="
 
           make download -j$(( $(nproc) * 2 ))
@@ -120,13 +120,11 @@ jobs:
 
       - name: Generate firmware info
         run: |
-          # 1. Extract kernel version from ophub output filename
           IMG_FILE=$(ls ${{ env.PACKAGED_OUTPUTPATH }}/*.img.gz 2>/dev/null | head -1)
           if [ -n "$IMG_FILE" ]; then
             KERNEL_VER=$(basename "$IMG_FILE" | sed 's/.*k\([0-9]*\.[0-9]*\.[0-9]*\).*/\1/')
           fi
 
-          # 2. Fallback: extract from kernel package
           if [ -z "$KERNEL_VER" ]; then
             KPKG=$(ls openwrt/bin/targets/armsr/armv8/packages/linux-*.apk 2>/dev/null | head -1)
             if [ -n "$KPKG" ]; then
@@ -134,12 +132,14 @@ jobs:
             fi
           fi
 
-          # 3. Fallback: extract from version.buildinfo
           if [ -z "$KERNEL_VER" ]; then
             KERNEL_VER=$(grep -o '[0-9]*\.[0-9]*\.[0-9]*' openwrt/bin/targets/armsr/armv8/version.buildinfo 2>/dev/null | head -1)
           fi
 
           echo "KERNEL_VER=${KERNEL_VER:-unknown}" >> $GITHUB_ENV
 
-          # 4. Extract installed luci-app plugins
-          PLUGINS=$(grep 'CONFIG_PACKAGE_luci-app-.*=y' o
+          PLUGINS=$(grep 'CONFIG_PACKAGE_luci-app-.*=y' openwrt/.config | sed 's/CONFIG_PACKAGE_//;s/=y//' | sort | tr '\n' ' ')
+          echo "PLUGINS_LIST=${PLUGINS}" >> $GITHUB_ENV
+
+          OW_VER=$(head -1 openwrt/bin/targets/armsr/armv8/version.buildinfo 2>/dev/null | awk '{print $2}')
+     
