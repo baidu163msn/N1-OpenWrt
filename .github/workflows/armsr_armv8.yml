@@ -1,176 +1,54 @@
-name: Build ImmortalWrt-25.12 for Phicomm N1
-
-on:
-  workflow_dispatch:
-    inputs:
-      ssh:
-        description: "SSH connection to Actions"
-        required: true
-        default: "false"
-        type: choice
-        options:
-          - true
-          - false
-  schedule:
-    - cron: "0 0 1,16 * *"
-
-env:
-  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  REPO_URL: https://github.com/immortalwrt/immortalwrt
-  REPO_BRANCH: openwrt-25.12
-  TZ: Asia/Shanghai
-
-jobs:
-  build:
-    runs-on: ubuntu-24.04
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@main
-
-      - name: Initialize environment
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          sudo -E apt-get -qq update > /dev/null
-          sudo -E apt-get -qq install -y $(curl -fsSL https://raw.githubusercontent.com/nantayo/My-Pkg/master/openwrt) > /dev/null
-          sudo -E apt-get -qq autoremove --purge > /dev/null
-          sudo -E apt-get -qq clean > /dev/null
-          sudo timedatectl set-timezone "$TZ"
-          sudo mkdir -p /workdir
-          sudo chown $USER:$GROUPS /workdir
-
-      - name: Clone source code
-        working-directory: /workdir
-        run: |
-          git clone $REPO_URL -b $REPO_BRANCH --single-branch --depth=1 openwrt
-          ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
-          echo "FILE_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
-
-      - name: Update and Install feeds
-        run: |
-          chmod +x armsr/armv8/diy/diy.sh
-          cd openwrt
-          ./scripts/feeds update -a
-          $GITHUB_WORKSPACE/armsr/armv8/diy/diy.sh
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
-
-      - name: Load N1 custom config
-        run: |
-          rm -rf openwrt/files openwrt/.config
-          mv armsr/armv8/N1/files armsr/armv8/N1/.config openwrt/
-
-      - name: SSH connect to Actions
-        uses: P3TERX/ssh2actions@main
-        if: github.event.inputs.ssh == 'true'
-
       - name: Download package
         working-directory: ./openwrt
         run: |
           make defconfig
 
+          # Force inject PARTSIZE
           if grep -q "CONFIG_TARGET_ROOTFS_PARTSIZE" .config; then
             sed -i 's/CONFIG_TARGET_ROOTFS_PARTSIZE=.*/CONFIG_TARGET_ROOTFS_PARTSIZE=1024/' .config
           else
             echo "CONFIG_TARGET_ROOTFS_PARTSIZE=1024" >> .config
           fi
 
+          # Force enable EXT4FS
           if grep -q "CONFIG_TARGET_ROOTFS_EXT4FS" .config; then
             sed -i 's/CONFIG_TARGET_ROOTFS_EXT4FS=.*/CONFIG_TARGET_ROOTFS_EXT4FS=y/' .config
           else
             echo "CONFIG_TARGET_ROOTFS_EXT4FS=y" >> .config
           fi
 
+          # Force remove ALL passwall packages
+          sed -i '/CONFIG_PACKAGE_luci-app-passwall/d' .config
+          sed -i '/CONFIG_PACKAGE_passwall/d' .config
+          cat >> .config << 'EOF'
+CONFIG_PACKAGE_luci-app-passwall=n
+CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Haproxy=n
+CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Shadowsocks_Rust_Client=n
+CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Shadowsocks_Rust_Server=n
+CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Simple_Obfs=n
+CONFIG_PACKAGE_luci-app-passwall_INCLUDE_SingBox=n
+CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray_Geoview=n
+CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray_Plugin=n
+CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Xray=n
+EOF
+
+          # Re-run defconfig
           make defconfig
 
+          # Force remove passwall AGAIN after defconfig
+          sed -i 's/CONFIG_PACKAGE_luci-app-passwall_INCLUDE_.*=y/CONFIG_PACKAGE_luci-app-passwall_INCLUDE_DISABLED=n/' .config
+          sed -i 's/CONFIG_PACKAGE_luci-app-passwall=y/CONFIG_PACKAGE_luci-app-passwall=n/' .config
+
+          # Verify
           echo "========== Config Verification =========="
           grep "ROOTFS_PARTSIZE" .config || true
           grep "ROOTFS_EXT4FS" .config || true
+          grep "luci-app-amlogic" .config || echo "WARN: amlogic not found"
           grep "openclash" .config || echo "WARN: openclash not found"
-          grep "sing-box" .config || echo "WARN: sing-box not found"
-          grep "passwall" .config || echo "OK: passwall removed"
+          grep "homeproxy" .config || echo "WARN: homeproxy not found"
+          grep "passwall.*=y" .config && echo "FAIL: passwall still enabled" || echo "OK: all passwall removed"
           grep "daed" .config || echo "OK: daed removed"
           echo "========================================="
 
           make download -j$(( $(nproc) * 2 ))
           find dl -size -1k -exec rm -f {} \;
-
-      - name: Compile N1 firmware
-        run: |
-          chmod -R 755 openwrt
-          cd openwrt
-          echo "$(nproc) thread compile"
-          make -j$(( $(nproc) + 1 )) || make -j1 V=s
-
-      - name: Package N1 firmware
-        uses: ophub/amlogic-s9xxx-openwrt@main
-        with:
-          openwrt_path: openwrt/bin/targets/armsr/armv8/*rootfs.tar.gz
-          openwrt_board: s905d
-          kernel_repo: ophub/kernel
-          kernel_usage: flippy
-          openwrt_kernel: 6.12.y
-          openwrt_size: 256/1024
-          builder_name: nantayo
-
-      - name: Generate firmware info
-        run: |
-          IMG_FILE=$(ls ${{ env.PACKAGED_OUTPUTPATH }}/*.img.gz 2>/dev/null | head -1)
-          if [ -n "$IMG_FILE" ]; then
-            KERNEL_VER=$(basename "$IMG_FILE" | sed 's/.*k\([0-9]*\.[0-9]*\.[0-9]*\).*/\1/')
-          fi
-          if [ -z "$KERNEL_VER" ]; then
-            KERNEL_VER=$(grep -o '[0-9]*\.[0-9]*\.[0-9]*' openwrt/bin/targets/armsr/armv8/version.buildinfo 2>/dev/null | head -1)
-          fi
-          echo "KERNEL_VER=${KERNEL_VER:-unknown}" >> $GITHUB_ENV
-
-          PLUGINS=$(grep 'CONFIG_PACKAGE_luci-app-.*=y' openwrt/.config | sed 's/CONFIG_PACKAGE_//;s/=y//' | sort | tr '\n' ' ')
-          echo "PLUGINS_LIST=${PLUGINS}" >> $GITHUB_ENV
-
-          OW_VER=$(head -1 openwrt/bin/targets/armsr/armv8/version.buildinfo 2>/dev/null | awk '{print $2}') || true
-          echo "OW_VER=${OW_VER:-ImmortalWrt 25.12}" >> $GITHUB_ENV
-
-          echo "=========================================="
-          echo "  Kernel:  ${KERNEL_VER:-unknown}"
-          echo "  Plugins: ${PLUGINS}"
-          echo "  Version: ${OW_VER:-ImmortalWrt 25.12}"
-          echo "=========================================="
-
-      - name: Upload firmware to release
-        uses: softprops/action-gh-release@master
-        with:
-          tag_name: OpenWrt_${{ env.FILE_DATE }}
-          files: ${{ env.PACKAGED_OUTPUTPATH }}/*.img.gz
-          body: |
-            ## Firmware Info
-
-            | Item | Detail |
-            |------|--------|
-            | System | ${{ env.OW_VER }} |
-            | Kernel | ${{ env.KERNEL_VER }} |
-            | Device | Phicomm N1 (S905D) |
-            | Build Date | ${{ env.FILE_DATE }} |
-
-            ## Installed Plugins
-
-            ```
-            ${{ env.PLUGINS_LIST }}
-            ```
-
-            ## Default Settings
-
-            | Item | Value |
-            |------|-------|
-            | IP | 192.168.68.68 |
-            | Gateway | 192.168.68.1 |
-            | User | root |
-            | Password | password |
-            | DTB | meson-gxl-s905d-p230.dtb |
-
-
-      - name: Delete old releases
-        uses: mgz0227/delete-older-releases@master
-        with:
-          keep_latest: 2
-          delete_tags: true
