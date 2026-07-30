@@ -168,10 +168,6 @@ jobs:
             | Password | password |
             | DTB | meson-gxl-s905d-p230.dtb |
 
-            ## Notes
-
-            - Flash eMMC via USB or luci-app-amlogic
-            - Recommend 1-2GB swap for stability
 
       - name: Delete old releases
         uses: mgz0227/delete-older-releases@master
