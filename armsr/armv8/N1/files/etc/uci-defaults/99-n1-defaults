@@ -1,0 +1,9 @@
+#!/bin/sh
+
+# Apply N1 defaults on first boot (then this script removes itself).
+
+# Default hostname
+uci -q set system.@system[0].hostname='Phicomm-N1'
+uci -q commit system
+
+exit 0
