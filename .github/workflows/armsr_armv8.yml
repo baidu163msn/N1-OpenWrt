@@ -84,17 +84,13 @@ jobs:
         run: |
           make defconfig
 
-          # Keep these explicitly off even if a dependency tries to select them
-          sed -i 's/^CONFIG_PACKAGE_luci-app-passwall=y/CONFIG_PACKAGE_luci-app-passwall=n/' .config
-          sed -i 's/^CONFIG_PACKAGE_luci-app-rclone=y/CONFIG_PACKAGE_luci-app-rclone=n/' .config
-
           echo "========== Config Verification =========="
           grep "ROOTFS_PARTSIZE" .config || true
           grep "ROOTFS_EXT4FS" .config || true
           grep "luci-app-amlogic" .config || echo "WARN: amlogic not found"
           grep "luci-app-openclash" .config || echo "WARN: openclash not found"
-          grep "CONFIG_PACKAGE_luci-app-passwall=y" .config && echo "FAIL: passwall enabled" || echo "OK: passwall disabled"
-          grep "CONFIG_PACKAGE_luci-app-rclone=y" .config && echo "FAIL: rclone enabled" || echo "OK: rclone disabled"
+          grep "CONFIG_PACKAGE_luci-app-passwall=y" .config && echo "FAIL: passwall enabled (*.config is authoritative*)" || echo "OK: passwall disabled"
+          grep "CONFIG_PACKAGE_luci-app-rclone=y" .config && echo "FAIL: rclone enabled (*.config is authoritative*)" || echo "OK: rclone disabled"
           echo "========================================="
 
           make download -j$(( $(nproc) * 2 ))
