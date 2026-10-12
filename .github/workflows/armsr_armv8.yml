@@ -14,11 +14,15 @@ on:
   schedule:
     - cron: "0 0 1,16 * *"
 
+permissions:
+  contents: write
+
 env:
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   REPO_URL: https://github.com/immortalwrt/immortalwrt
   REPO_BRANCH: openwrt-25.12
   TZ: Asia/Shanghai
+  CCACHE_DIR: /workdir/openwrt/.ccache
 
 jobs:
   build:
@@ -26,7 +30,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@main
+        uses: actions/checkout@v4
 
       - name: Initialize environment
         env:
@@ -47,6 +51,16 @@ jobs:
           ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
           echo "FILE_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
 
+      - name: Cache downloads and ccache
+        uses: actions/cache@v4
+        with:
+          path: |
+            /workdir/openwrt/dl
+            /workdir/openwrt/.ccache
+          key: ${{ runner.os }}-openwrt-25.12-${{ hashFiles('armsr/armv8/N1/.config') }}
+          restore-keys: |
+            ${{ runner.os }}-openwrt-25.12-
+
       - name: Update and Install feeds
         run: |
           chmod +x armsr/armv8/diy/diy.sh
@@ -62,7 +76,7 @@ jobs:
           mv armsr/armv8/N1/files armsr/armv8/N1/.config openwrt/
 
       - name: SSH connect to Actions
-        uses: P3TERX/ssh2actions@main
+        uses: P3TERX/ssh2actions@v1.0.0
         if: github.event.inputs.ssh == 'true'
 
       - name: Download package
@@ -70,70 +84,35 @@ jobs:
         run: |
           make defconfig
 
-          # Force inject PARTSIZE
-          if grep -q "CONFIG_TARGET_ROOTFS_PARTSIZE" .config; then
-            sed -i 's/CONFIG_TARGET_ROOTFS_PARTSIZE=.*/CONFIG_TARGET_ROOTFS_PARTSIZE=1024/' .config
-          else
-            echo "CONFIG_TARGET_ROOTFS_PARTSIZE=1024" >> .config
-          fi
+          # Keep these explicitly off even if a dependency tries to select them
+          sed -i 's/^CONFIG_PACKAGE_luci-app-passwall=y/CONFIG_PACKAGE_luci-app-passwall=n/' .config
+          sed -i 's/^CONFIG_PACKAGE_luci-app-rclone=y/CONFIG_PACKAGE_luci-app-rclone=n/' .config
 
-          # Force enable EXT4FS
-          if grep -q "CONFIG_TARGET_ROOTFS_EXT4FS" .config; then
-            sed -i 's/CONFIG_TARGET_ROOTFS_EXT4FS=.*/CONFIG_TARGET_ROOTFS_EXT4FS=y/' .config
-          else
-            echo "CONFIG_TARGET_ROOTFS_EXT4FS=y" >> .config
-          fi
-
-          # Force remove ALL passwall packages
-          sed -i '/CONFIG_PACKAGE_luci-app-passwall/d' .config
-          sed -i '/CONFIG_PACKAGE_passwall/d' .config
-          cat >> .config << 'EOF'
-          CONFIG_PACKAGE_luci-app-passwall=n
-          CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Haproxy=n
-          CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Shadowsocks_Rust_Client=n
-          CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Shadowsocks_Rust_Server=n
-          CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Simple_Obfs=n
-          CONFIG_PACKAGE_luci-app-passwall_INCLUDE_SingBox=n
-          CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray_Geoview=n
-          CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray_Plugin=n
-          CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Xray=n
-          EOF
-          # Force remove rclone (not needed)
-          sed -i '/CONFIG_PACKAGE_luci-app-rclone/d' .config
-          sed -i '/CONFIG_PACKAGE_rclone/d' .config
-          cat >> .config << 'EOF'
-          CONFIG_PACKAGE_luci-app-rclone=n
-          CONFIG_PACKAGE_luci-app-rclone_INCLUDE_rclone-ng=n
-          CONFIG_PACKAGE_luci-app-rclone_INCLUDE_rclone-webui=n
-          EOF
-          make defconfig
-
-          # Force remove passwall AGAIN after defconfig
-          sed -i 's/CONFIG_PACKAGE_luci-app-passwall_INCLUDE_.*=y/CONFIG_PACKAGE_luci-app-passwall_INCLUDE_DISABLED=n/' .config
-          sed -i 's/CONFIG_PACKAGE_luci-app-passwall=y/CONFIG_PACKAGE_luci-app-passwall=n/' .config
-
-          # Verify
           echo "========== Config Verification =========="
           grep "ROOTFS_PARTSIZE" .config || true
           grep "ROOTFS_EXT4FS" .config || true
           grep "luci-app-amlogic" .config || echo "WARN: amlogic not found"
-          grep "openclash" .config || echo "WARN: openclash not found"
-          grep "homeproxy" .config || echo "WARN: homeproxy not found"
-          grep "passwall.*=y" .config && echo "FAIL: passwall still enabled" || echo "OK: all passwall removed"
+          grep "luci-app-openclash" .config || echo "WARN: openclash not found"
+          grep "CONFIG_PACKAGE_luci-app-passwall=y" .config && echo "FAIL: passwall enabled" || echo "OK: passwall disabled"
+          grep "CONFIG_PACKAGE_luci-app-rclone=y" .config && echo "FAIL: rclone enabled" || echo "OK: rclone disabled"
           echo "========================================="
 
           make download -j$(( $(nproc) * 2 ))
-          find dl -size -1k -exec rm -f {} \;
+          BAD=$(find dl -type f -size -1k 2>/dev/null || true)
+          if [ -n "$BAD" ]; then
+            echo "WARN: removing suspicious empty/truncated downloads:"
+            printf '%s\n' "$BAD"
+            printf '%s\n' "$BAD" | xargs -r rm -f
+          fi
 
       - name: Compile N1 firmware
         run: |
-          chmod -R 755 openwrt
           cd openwrt
           echo "$(nproc) thread compile"
-          make -j$(( $(nproc) + 1 )) || make -j1 V=s
+          make -j$(nproc) || make -j1 V=s
 
       - name: Package N1 firmware
-        uses: ophub/amlogic-s9xxx-openwrt@main
+        uses: ophub/amlogic-s9xxx-openwrt@30f81d60774bfc00865e16bfb33d6c80a1261033
         with:
           openwrt_path: openwrt/bin/targets/armsr/armv8/*rootfs.tar.gz
           openwrt_board: s905d
@@ -167,7 +146,7 @@ jobs:
           echo "=========================================="
 
       - name: Upload firmware to release
-        uses: softprops/action-gh-release@master
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: OpenWrt_${{ env.FILE_DATE }}
           files: ${{ env.PACKAGED_OUTPUTPATH }}/*.img.gz
@@ -198,7 +177,7 @@ jobs:
             | DTB | meson-gxl-s905d-p230.dtb |
 
       - name: Delete old releases
-        uses: mgz0227/delete-older-releases@master
+        uses: mgz0227/delete-older-releases@v0.3.4
         with:
           keep_latest: 2
           delete_tags: true
