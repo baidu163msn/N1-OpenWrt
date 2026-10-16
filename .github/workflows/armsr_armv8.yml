@@ -30,7 +30,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Initialize environment
         env:
@@ -52,7 +52,7 @@ jobs:
           echo "FILE_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
 
       - name: Cache downloads and ccache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             /workdir/openwrt/dl
@@ -76,7 +76,7 @@ jobs:
           mv armsr/armv8/N1/files armsr/armv8/N1/.config openwrt/
 
       - name: SSH connect to Actions
-        uses: P3TERX/ssh2actions@v1.0.0
+        uses: P3TERX/ssh2actions@71006b93bff498b020448ac10964f8a5d0f9f32c # v1.0.0
         if: github.event.inputs.ssh == 'true'
 
       - name: Download package
@@ -142,7 +142,7 @@ jobs:
           echo "=========================================="
 
       - name: Upload firmware to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: OpenWrt_${{ env.FILE_DATE }}-${{ github.run_number }}
           files: ${{ env.PACKAGED_OUTPUTPATH }}/*.img.gz
@@ -173,7 +173,7 @@ jobs:
             | DTB | meson-gxl-s905d-p230.dtb |
 
       - name: Delete old releases
-        uses: mgz0227/delete-older-releases@v0.3.4
+        uses: mgz0227/delete-older-releases@dfbe6be2a006e9475dfcbe5b8d201f1824c2a9fe # v0.3.4
         with:
           keep_latest: 2
           delete_tags: true
