@@ -14,11 +14,11 @@ on:
   schedule:
     - cron: "0 0 1,16 * *"
 
+#最小权限：默认只读，构建任务单独申请写权限
 permissions:
-  contents: write
+  contents: read
 
 env:
-  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   REPO_URL: https://github.com/immortalwrt/immortalwrt
   REPO_BRANCH: openwrt-25.12
   TZ: Asia/Shanghai
@@ -27,7 +27,9 @@ env:
 jobs:
   build:
     runs-on: ubuntu-24.04
-
+    permissions:
+      contents: write
+      actions: write
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -37,7 +39,8 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
         run: |
           sudo -E apt-get -qq update > /dev/null
-          sudo -E apt-get -qq install -y $(curl -fsSL https://raw.githubusercontent.com/nantayo/My-Pkg/master/openwrt) > /dev/null
+          # 固定到 My-Pkg 的提交，避免上游 master 变动带来供应链风险
+          sudo -E apt-get -qq install -y $(curl -fsSL https://raw.githubusercontent.com/nantayo/My-Pkg/2ee220904167903ce860a6e56f098b41cdc073bb/openwrt) > /dev/null
           sudo -E apt-get -qq autoremove --purge > /dev/null
           sudo -E apt-get -qq clean > /dev/null
           sudo timedatectl set-timezone "$TZ"
@@ -144,6 +147,7 @@ jobs:
       - name: Upload firmware to release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
+          token: ${{secrets.GITHUB_TOKEN}}
           tag_name: OpenWrt_${{ env.FILE_DATE }}-${{ github.run_number }}
           files: ${{ env.PACKAGED_OUTPUTPATH }}/*.img.gz
           body: |
@@ -173,7 +177,40 @@ jobs:
             | DTB | meson-gxl-s905d-p230.dtb |
 
       - name: Delete old releases
-        uses: mgz0227/delete-older-releases@dfbe6be2a006e9475dfcbe5b8d201f1824c2a9fe # v0.3.4
-        with:
-          keep_latest: 2
-          delete_tags: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          gh release list --limit 100 --json tagName,createdAt \
+            --jq 'sort_by(.createdAt) | reverse | .[2:] | .[].tagName' |
+            while IFS= read -r TAG; do
+              [ -n "$TAG" ] || continue
+              gh release delete "$TAG" --yes --cleanup-tag ||
+                echo "warning: failed to delete release $TAG"
+            done
+
+          echo "old releases cleaned; keeping the latest 2"
+
+      - name: Roll build cache
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # 与 Cache 步骤的 key 保持一致（runner.os = Linux，hashFiles = sha256）
+          PREFIX="Linux-openwrt-25.12-"
+          CURRENT_KEY="${PREFIX}$(git show HEAD:armsr/armv8/N1/.config | sha256sum | cut -d ' ' -f 1)"
+
+          gh cache list --limit 100 --json id,key |
+            jq -r --arg p "$PREFIX" '.[] | select(.key | startswith($p)) | [.id, .key] | @tsv' |
+            while IFS=$'\t' read -r CACHE_ID CACHE_KEY; do
+              [ -n "$CACHE_ID" ] || continue
+              [ "$CACHE_KEY" = "$CURRENT_KEY" ] && continue
+              gh cache delete "$CACHE_ID" ||
+                echo "warning: failed to delete cache $CACHE_ID ($CACHE_KEY)"
+            done
+
+          echo "cache rollover done (current key: $CURRENT_KEY)"
